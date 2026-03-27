@@ -10,7 +10,6 @@
 /// - Fees calculated only from accepted transactions (virtual chain)
 
 use crate::core::dag::BlockNode;
-use crate::core::state::transaction::Transaction;
 use crate::core::crypto::Hash;
 use crate::core::errors::CoreError;
 use super::emission;
@@ -23,7 +22,7 @@ use std::collections::HashSet;
 ///
 /// Note: This requires access to UTXO state to get input values.
 /// In the reward system context, we sum fees from accepted transactions only.
-pub fn calculate_fees(block: &BlockNode, _accepted_txs: &HashSet<Hash>) -> Result<u64, CoreError> {
+pub fn calculate_fees(_block: &BlockNode, _accepted_txs: &HashSet<Hash>) -> Result<u64, CoreError> {
     // Initial implementation: fees will be calculated from accepted transactions
     // For now, return 0 as placeholder - will be filled with actual fee calculation
     // when UTXO state is available during validation
@@ -95,6 +94,52 @@ pub fn calculate_accepted_fees(
 /// - accepted_txs: Set of accepted transactions for fee calculation
 ///
 /// Returns: Total reward amount in satoshis, or error
+pub fn create_coinbase_tx(
+    miner_reward_address: &crate::core::crypto::Hash,
+    node_reward_pool_address: Option<&crate::core::crypto::Hash>,
+    active_node_count: u32,
+    total_reward: u128,
+) -> crate::core::state::transaction::Transaction {
+    let miner_reward: u128 = if active_node_count == 0 {
+        total_reward
+    } else {
+        (total_reward * 80) / 100
+    };
+
+    let node_reward_pool: u128 = total_reward.saturating_sub(miner_reward);
+
+    let mut outputs = Vec::new();
+
+    outputs.push(crate::core::state::transaction::TxOutput {
+        value: miner_reward as u64,
+        pubkey_hash: miner_reward_address.clone(),
+    });
+
+    if active_node_count > 0 {
+        if let Some(pool_addr) = node_reward_pool_address {
+            outputs.push(crate::core::state::transaction::TxOutput {
+                value: node_reward_pool as u64,
+                pubkey_hash: pool_addr.clone(),
+            });
+        } else {
+            outputs.push(crate::core::state::transaction::TxOutput {
+                value: node_reward_pool as u64,
+                pubkey_hash: miner_reward_address.clone(),
+            });
+        }
+    }
+
+    let mut tx = crate::core::state::transaction::Transaction {
+        id: crate::core::crypto::Hash::new(b""),
+        inputs: Vec::new(),
+        outputs,
+        chain_id: 1,
+        locktime: 0,
+    };
+    tx.id = tx.calculate_id();
+    tx
+}
+
 pub fn block_total_reward(
     block: &BlockNode,
     daa_score: u64,
@@ -114,11 +159,15 @@ pub fn block_total_reward(
 
     // Total reward = subsidy + fees
     // Use checked_add to detect overflow
-    subsidy
-        .checked_add(fees)
+    let total = subsidy
+        .checked_add(fees as u128)
         .ok_or_else(|| {
-            CoreError::TransactionError("Reward overflow: subsidy + fees exceed u64::MAX".to_string())
-        })
+            CoreError::TransactionError("Reward overflow: subsidy + fees exceed max supply".to_string())
+        })?;
+
+    total
+        .try_into()
+        .map_err(|_| CoreError::TransactionError("Total reward overflow u64".to_string()))
 }
 
 /// Validate coinbase transaction value against computed reward
@@ -133,7 +182,7 @@ pub fn block_total_reward(
 /// Returns: Ok if valid, error if coinbase doesn't match expected reward
 pub fn validate_coinbase_reward(
     block: &BlockNode,
-    actual_reward: u64,
+    actual_reward: u128,
 ) -> Result<(), CoreError> {
     // Find coinbase transaction (transaction with no inputs)
     let coinbase_tx = block
@@ -142,30 +191,28 @@ pub fn validate_coinbase_reward(
         .find(|tx| tx.is_coinbase());
 
     match coinbase_tx {
-        Some(tx) if tx.outputs.len() == 1 => {
-            let actual_value = tx.outputs[0].value;
+        Some(tx) if !tx.outputs.is_empty() => {
+            let total_value: u128 = tx.outputs.iter().map(|o| o.value as u128).sum();
 
-            if actual_value == actual_reward {
-                Ok(())
-            } else {
-                Err(CoreError::TransactionError(format!(
-                    "Invalid coinbase reward: expected {}, got {}",
-                    actual_reward, actual_value
-                )))
+            if total_value != actual_reward {
+                return Err(CoreError::TransactionError(format!(
+                    "Invalid coinbase reward: expected {} total, got {}",
+                    actual_reward, total_value
+                )));
             }
-        }
-        Some(tx) => {
-            if tx.outputs.is_empty() {
-                Err(CoreError::TransactionError(
-                    "Coinbase transaction has no outputs".to_string(),
-                ))
-            } else {
-                Err(CoreError::TransactionError(format!(
-                    "Coinbase must have exactly 1 output, got {}",
-                    tx.outputs.len()
-                )))
+
+            // At least miner split + node split must exist
+            if tx.outputs.len() < 2 {
+                return Err(CoreError::TransactionError(
+                    "Coinbase must have at least 2 outputs for miner+node split".to_string(),
+                ));
             }
+
+            Ok(())
         }
+        Some(_) => Err(CoreError::TransactionError(
+            "Coinbase transaction has no outputs".to_string(),
+        )),
         None => Err(CoreError::TransactionError(
             "Block must contain a coinbase transaction".to_string(),
         )),
@@ -219,21 +266,34 @@ mod tests {
         let accepted_txs = HashSet::new();
         let reward = block_total_reward(&block, 0, true, &accepted_txs);
 
-        // Genesis block (daa_score=0) has subsidy of 100
-        assert_eq!(reward.ok(), Some(100));
+        // Genesis block (daa_score=0) has subsidy of 100 coins in smallest unit 8 decimal
+        assert_eq!(
+            reward.ok(),
+            Some((100u128 * crate::core::consensus::emission::UNIT).try_into().unwrap()),
+        );
     }
 
     #[test]
     fn test_coinbase_validation_success() {
-        let coinbase_output = TxOutput {
-            value: 100,
-            pubkey_hash: Hash::new(b"miner"),
-        };
+        let total_reward = 100u128;
+        let miner_value = (total_reward * 80) / 100;
+        let node_value = total_reward - miner_value;
 
         let coinbase_tx = Transaction {
             id: Hash::new(b"coinbase"),
             inputs: vec![],
-            outputs: vec![coinbase_output],
+            outputs: vec![
+                TxOutput {
+                    value: miner_value as u64,
+                    pubkey_hash: Hash::new(b"miner"),
+                },
+                TxOutput {
+                    value: node_value as u64,
+                    pubkey_hash: Hash::new(b"node_pool"),
+                },
+            ],
+            chain_id: 1,
+            locktime: 0,
         };
 
         let block = BlockNode {
@@ -250,7 +310,25 @@ mod tests {
             transactions: vec![coinbase_tx],
         };
 
-        assert!(validate_coinbase_reward(&block, 100).is_ok());
+        assert!(validate_coinbase_reward(&block, total_reward).is_ok());
+    }
+
+    #[test]
+    fn test_create_coinbase_tx_with_active_node_count() {
+        let total_reward = crate::core::consensus::emission::BASE_REWARD;
+        let miner_address = Hash::new(b"miner");
+        let node_pool_address = Hash::new(b"pool");
+        let active_node_count = 90;
+
+        let tx = create_coinbase_tx(&miner_address, Some(&node_pool_address), active_node_count, total_reward);
+
+        let expected_miner = ((total_reward * 80) / 100) as u64;
+        let expected_pool = (total_reward - (total_reward * 80 / 100)) as u64;
+
+        assert_eq!(tx.outputs[0].value, expected_miner);
+        assert_eq!(tx.outputs.iter().map(|o| o.value as u128).sum::<u128>(), total_reward);
+        assert_eq!(tx.outputs.len(), 2);
+        assert_eq!(tx.outputs[1].value, expected_pool);
     }
 
     #[test]
@@ -264,6 +342,8 @@ mod tests {
             id: Hash::new(b"coinbase"),
             inputs: vec![],
             outputs: vec![coinbase_output],
+            chain_id: 1,
+            locktime: 0,
         };
 
         let block = BlockNode {

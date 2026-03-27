@@ -2,8 +2,11 @@ pub mod transaction;
 pub mod utxo;
 
 use crate::core::crypto::Hash;
-use crate::core::state::utxo::UtxoSet;
+use crate::core::state::utxo::{UtxoSet, UtxoChangeSet, OutPoint};
+use crate::core::state::transaction::TxOutput;
 use crate::core::dag::BlockNode;
+use crate::core::errors::CoreError;
+use std::collections::HashMap;
 
 /// Blockchain state management
 /// 
@@ -46,11 +49,41 @@ impl BlockchainState {
         self.virtual_score
     }
 
-    pub fn apply_block(&mut self, block: &BlockNode) -> Result<(), crate::core::errors::CoreError> {
+    pub fn apply_block(&mut self, block: &BlockNode) -> Result<(), CoreError> {
+        // Keep track of all changesets for rollback
+        let mut changesets: Vec<UtxoChangeSet> = Vec::new();
+        // Keep track of spent outputs for revert
+        let mut spent_outputs: HashMap<OutPoint, TxOutput> = HashMap::new();
+
+        // Process each transaction
         for tx in &block.transactions {
-            self.utxo_set.validate_tx(tx).map_err(crate::core::errors::CoreError::TransactionError)?;
-            self.utxo_set.apply_tx(tx);
+            // Save spent outputs before applying
+            for input in &tx.inputs {
+                let key = (input.prev_tx.clone(), input.index);
+                if let Some(output) = self.utxo_set.utxos.get(&key) {
+                    spent_outputs.insert(key, output.clone());
+                }
+            }
+
+            // Apply transaction and collect changeset
+            match self.utxo_set.apply_tx(tx) {
+                Ok(changeset) => {
+                    changesets.push(changeset);
+                }
+                Err(e) => {
+                    // Rollback all previously applied transactions in reverse order
+                    for changeset in changesets.iter().rev() {
+                        if let Err(revert_err) = self.utxo_set.revert_tx(changeset, &spent_outputs) {
+                            return Err(CoreError::TransactionError(
+                                format!("Transaction apply failed and revert failed: {}", revert_err),
+                            ));
+                        }
+                    }
+                    return Err(e);
+                }
+            }
         }
+
         Ok(())
     }
 
@@ -72,7 +105,7 @@ impl BlockchainState {
 
             // Step 2: Restore spent inputs back to UTXO set
             // We need to reconstruct the UTXOs from transaction inputs
-            for input in &tx.inputs {
+            for _input in &tx.inputs {
                 // We don't have the original output value stored, so this is a limitation.
                 // In production, we would store spent outputs for exact restoration.
                 // For now, mark this as requiring snapshot-based rollback (which we do use).

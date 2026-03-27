@@ -16,19 +16,28 @@ pub fn is_valid_pow(hash: &Hash, target: u64) -> bool {
     hash_val < target
 }
 
-/// Mine a block by finding a valid nonce
-/// Returns the nonce if found, or None if not found within reasonable attempts
-pub fn mine_block(header: &[u8], target: u64) -> Option<u64> {
-    for nonce in 0..u64::MAX {
+/// Mine a block by finding a valid nonce with miner and node reward addresses
+/// Includes address fields in hashed input to ensure explicit minting destination.
+/// This guards coinbase issuance by making reward addresses part of PoW input.
+pub fn mine_block(
+    header: &[u8],
+    target: u64,
+    miner_address: &[u8],
+    node_reward_address: &[u8],
+) -> Option<u64> {
+    if miner_address.is_empty() || node_reward_address.is_empty() {
+        return None;
+    }
+
+    for nonce in 0..=u64::MAX {
         let mut header_with_nonce = header.to_vec();
         header_with_nonce.extend_from_slice(&nonce.to_le_bytes());
+        header_with_nonce.extend_from_slice(miner_address);
+        header_with_nonce.extend_from_slice(node_reward_address);
+
         let hash = calculate_hash(&header_with_nonce);
         if is_valid_pow(&hash, target) {
             return Some(nonce);
-        }
-        // Prevent infinite loop in tests, but in practice this should be interruptible
-        if nonce > 1_000_000 {
-            return None;
         }
     }
     None

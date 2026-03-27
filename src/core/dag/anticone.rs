@@ -7,7 +7,7 @@ pub fn get_anticone(dag: &Dag, id: &Hash) -> Vec<Hash> {
     let descendants: HashSet<Hash> = dag.get_descendants(id).into_iter().collect();
     
     // Deterministic iteration: sort before filtering
-    let mut all_hashes = dag.get_all_hashes();
+    let all_hashes = dag.get_all_hashes();
     let mut anticone = Vec::new();
     
     for hash in all_hashes {

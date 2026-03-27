@@ -3,16 +3,16 @@ use std::fmt;
 /// Core engine errors
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
-    /// Block with the given hash was not found in DAG
     BlockNotFound,
-    /// Parent block does not exist in DAG
     InvalidParent,
-    /// Block already exists in DAG
     DuplicateBlock,
-    /// Consensus processing failed
     ConsensusError,
-    /// Transaction validation failed
     TransactionError(String),
+    InvalidSignature,
+    InvalidPublicKey,
+    SignatureVerificationFailed,
+    ConfigError(String),
+    SerializationError(String),
 }
 
 impl fmt::Display for CoreError {
@@ -23,6 +23,11 @@ impl fmt::Display for CoreError {
             CoreError::DuplicateBlock => write!(f, "Duplicate block"),
             CoreError::ConsensusError => write!(f, "Consensus error"),
             CoreError::TransactionError(msg) => write!(f, "Transaction error: {}", msg),
+            CoreError::InvalidSignature => write!(f, "Invalid signature"),
+            CoreError::InvalidPublicKey => write!(f, "Invalid public key"),
+            CoreError::SignatureVerificationFailed => write!(f, "Signature verification failed"),
+            CoreError::ConfigError(msg) => write!(f, "Config error: {}", msg),
+            CoreError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
         }
     }
 }

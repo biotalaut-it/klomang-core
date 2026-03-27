@@ -58,7 +58,7 @@ impl GhostDag {
         }
 
         // Get anticone and convert to HashSet for k-cluster check
-        let mut candidates = self.anticone(dag, selected_parent);
+        let candidates = self.anticone(dag, selected_parent);
         // Already sorted from anticone, so iteration is deterministic
         
         for candidate in candidates {

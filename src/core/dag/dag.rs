@@ -169,4 +169,20 @@ impl Dag {
     pub fn get_block_count(&self) -> usize {
         self.blocks.len()
     }
+
+    pub fn remove_block(&mut self, id: &Hash) {
+        if let Some(block) = self.blocks.remove(id) {
+            self.tips.remove(id);
+            for parent in block.parents {
+                if let Some(parent_block) = self.blocks.get_mut(&parent) {
+                    parent_block.children.remove(id);
+                }
+            }
+            for child in block.children {
+                if let Some(child_block) = self.blocks.get_mut(&child) {
+                    child_block.parents.remove(id);
+                }
+            }
+        }
+    }
 }
