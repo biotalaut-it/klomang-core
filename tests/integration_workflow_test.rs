@@ -12,7 +12,8 @@ use std::collections::HashSet;
 
 /// Helper to create a simple transaction
 fn make_tx(outputs: Vec<TxOutput>) -> Transaction {
-    Transaction::new(Vec::new(), outputs)
+    let mut tx = Transaction::new(Vec::new(), outputs);
+    tx
 }
 
 /// Helper to create a block
@@ -264,4 +265,57 @@ fn test_complete_workflow_integration() {
     
     let all = dag.get_all_hashes();
     assert!(all.len() >= 4);
+}
+
+/// Test 16: Parallel execution no conflict
+#[test]
+fn test_parallel_execution_no_conflict() {
+    use klomang_core::core::scheduler::parallel::ParallelScheduler;
+    use klomang_core::core::state::transaction::TxInput;
+
+    // Create two transactions with different outputs (no conflict)
+    let tx1 = Transaction::new(
+        vec![],
+        vec![TxOutput { value: 100, pubkey_hash: Hash::new(b"alice") }]
+    );
+    let tx2 = Transaction::new(
+        vec![],
+        vec![TxOutput { value: 200, pubkey_hash: Hash::new(b"bob") }]
+    );
+
+    let txs = vec![tx1, tx2];
+    let groups = ParallelScheduler::schedule_transactions(txs);
+
+    // Should be scheduled in one group since no conflicts
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].len(), 2);
+}
+
+/// Test 17: Parallel execution with conflict
+#[test]
+fn test_parallel_execution_conflict() {
+    use klomang_core::core::scheduler::parallel::ParallelScheduler;
+    use klomang_core::core::state::transaction::TxInput;
+
+    // Create transactions that might conflict (same output key)
+    // For simplicity, create txs with same hash_with_index
+    let mut tx1 = Transaction::new(
+        vec![],
+        vec![TxOutput { value: 100, pubkey_hash: Hash::new(b"alice") }]
+    );
+    tx1.id = Hash::new(b"same_id");
+
+    let mut tx2 = Transaction::new(
+        vec![],
+        vec![TxOutput { value: 200, pubkey_hash: Hash::new(b"bob") }]
+    );
+    tx2.id = Hash::new(b"same_id");
+
+    let txs = vec![tx1, tx2];
+    let groups = ParallelScheduler::schedule_transactions(txs);
+
+    // Should be scheduled in separate groups due to conflict
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].len(), 1);
+    assert_eq!(groups[1].len(), 1);
 }

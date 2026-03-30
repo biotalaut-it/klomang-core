@@ -310,6 +310,17 @@ impl GhostDag {
             .max_by(|(h1, s1), (h2, s2)| s1.cmp(s2).then(h2.cmp(h1)))
             .map(|(hash, _)| hash)
     }
+
+    /// Check if a block/transaction is final (irreversible)
+    /// A block is considered final if its blue score is below the virtual blue score by a certain threshold
+    pub fn check_finality(&self, dag: &Dag, block_hash: &Hash, finality_threshold: u64) -> bool {
+        let virtual_block = self.build_virtual_block(dag);
+        let block_blue_score = dag.get_block(block_hash)
+            .map(|b| b.blue_score)
+            .unwrap_or(0);
+
+        virtual_block.blue_score.saturating_sub(block_blue_score) >= finality_threshold
+    }
 }
 
 impl Default for GhostDag {

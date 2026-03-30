@@ -16,6 +16,7 @@ pub enum CoreError {
     PolynomialCommitmentError(String),
     CryptographicError(String),
     StorageError(String),
+    PrunedData(String),
 }
 
 impl fmt::Display for CoreError {
@@ -34,6 +35,7 @@ impl fmt::Display for CoreError {
             CoreError::PolynomialCommitmentError(msg) => write!(f, "Polynomial commitment error: {}", msg),
             CoreError::CryptographicError(msg) => write!(f, "Cryptographic error: {}", msg),
             CoreError::StorageError(msg) => write!(f, "Storage error: {}", msg),
+            CoreError::PrunedData(msg) => write!(f, "Pruned data access error: {}", msg),
         }
     }
 }

@@ -27,29 +27,19 @@ use std::collections::HashSet;
 // ============================================================================
 
 fn make_coinbase_tx(outputs: Vec<TxOutput>) -> Transaction {
-    let tx = Transaction {
-        id: Hash::new(&[]),
-        inputs: vec![],
-        outputs,
-        chain_id: 1,
-        locktime: 0,
-    };
-    let mut tx_with_id = tx;
-    tx_with_id.id = tx_with_id.calculate_id();
-    tx_with_id
+    let mut tx = Transaction::new(Vec::new(), outputs);
+    tx.chain_id = 1;
+    tx.locktime = 0;
+    tx.id = tx.calculate_id();
+    tx
 }
 
 fn make_tx(inputs: Vec<TxInput>, outputs: Vec<TxOutput>) -> Transaction {
-    let tx = Transaction {
-        id: Hash::new(&[]),
-        inputs,
-        outputs,
-        chain_id: 1,
-        locktime: 0,
-    };
-    let mut tx_with_id = tx;
-    tx_with_id.id = tx_with_id.calculate_id();
-    tx_with_id
+    let mut tx = Transaction::new(inputs, outputs);
+    tx.chain_id = 1;
+    tx.locktime = 0;
+    tx.id = tx.calculate_id();
+    tx
 }
 
 fn make_block(id: &[u8], txs: Vec<Transaction>, parents: HashSet<Hash>) -> BlockNode {

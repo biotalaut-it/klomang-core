@@ -4,6 +4,8 @@ pub mod consensus;
 pub mod pow;
 pub mod daa;
 pub mod state;
+pub mod vm;
 pub mod state_manager;
+pub mod scheduler;
 pub mod errors;
 pub mod config;

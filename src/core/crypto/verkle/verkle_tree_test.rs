@@ -26,7 +26,7 @@ fn test_verkle_tree_stress_inserts_root_consistency() {
     let root_first = tree.get_root();
 
     for (key, value) in &kv_pairs {
-        assert_eq!(tree.get(*key), Some(value.clone()));
+        assert_eq!(tree.get(*key).unwrap(), Some(value.clone()));
     }
 
     // Rebuild tree with same data and compare root to ensure deterministic consistency
@@ -120,7 +120,7 @@ fn test_verkle_tree_cryptography_stress_1000_plus_pairs() {
 
     // Verify all values can be retrieved correctly
     for (key, expected_value) in &kv_pairs {
-        let retrieved = tree.get(*key);
+        let retrieved = tree.get(*key).unwrap();
         assert_eq!(retrieved, Some(expected_value.clone()), "Failed to retrieve value for key {:?}", key);
     }
 
@@ -202,7 +202,10 @@ fn test_verkle_tree_proof_verification_ipa_comprehensive() {
 
         let mut tampered_siblings = proof.clone();
         if !tampered_siblings.siblings.is_empty() {
-            tampered_siblings.siblings[0][0] ^= 0x01;
+            // Tamper on an entry guaranteed to be used in the recomputation path
+            let depth = 0;
+            let tamper_index = ((proof.path[depth] as usize) + 1) % 256;
+            tampered_siblings.siblings[depth * 256 + tamper_index][0] ^= 0x01;
         }
         assert!(!tree.verify_proof(&tampered_siblings), "Tampered siblings should fail");
     }

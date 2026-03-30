@@ -9,6 +9,9 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
+thiserror = "1.0"
+wasmer = "3.3.0"
+wasmer-middlewares = "3.3.0"
 blake3 = "1.5"
 k256 = { version = "0.13", features = ["schnorr"] }
 rand = "0.8"
@@ -21,3 +24,4 @@ ark-bls12-381 = "0.4"
 ark-ed-on-bls12-381 = "0.4"
 ark-ed-on-bls12-381-bandersnatch = "0.4"
 ark-serialize = "0.4"
+rayon = "1.7"

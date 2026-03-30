@@ -19,3 +19,6 @@ pub use core::consensus::emission::{COIN_UNIT, MAX_SUPPLY, block_reward};
 pub use core::daa::difficulty::Daa;
 pub use core::pow::Pow;
 
+#[no_mangle]
+pub extern "C" fn __rust_probestack() {}
+

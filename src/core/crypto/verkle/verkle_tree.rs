@@ -7,6 +7,7 @@
 //! - Cached commitments di setiap node untuk optimization
 
 use crate::core::crypto::verkle::polynomial_commitment::{Commitment, PolynomialCommitment, OpeningProof};
+use crate::core::errors::CoreError;
 use crate::core::state::storage::Storage;
 use ark_ec::Group;
 use ark_ed_on_bls12_381_bandersnatch::EdwardsProjective;
@@ -14,7 +15,7 @@ use ark_ff::{Field, PrimeField};
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial};
 use ark_serialize::CanonicalSerialize;
 use blake3;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const VERKLE_RADIX: usize = 256;
 const KEY_SIZE: usize = 32;
@@ -62,6 +63,10 @@ pub struct VerkleTree<S: Storage> {
     root_cache: Option<[u8; 32]>,
     /// Dirty flag untuk track perubahan yang memerlukan recompute root
     dirty: bool,
+    /// Mark keys that have been pruned
+    pruned_keys: HashSet<Vec<u8>>,
+    /// Stored commitments for pruned paths, to preserve root for stateless proofs
+    pruned_commitments: HashMap<Vec<u8>, Commitment>,
 }
 
 impl<S: Storage> VerkleTree<S> {
@@ -79,6 +84,8 @@ impl<S: Storage> VerkleTree<S> {
             empty_subtree_scalars,
             root_cache: None,
             dirty: true,
+            pruned_keys: HashSet::new(),
+            pruned_commitments: HashMap::new(),
         };
         tree.ensure_node(&[]);
         tree
@@ -86,6 +93,9 @@ impl<S: Storage> VerkleTree<S> {
 
     /// Insert key-value pair ke dalam tree dengan incremental commitment updates
     pub fn insert(&mut self, key: [u8; KEY_SIZE], value: Vec<u8>) {
+        // Any insertion invalidates any stale pruned commitment path relating to the key
+        self.clear_pruned_state_for_key(&key);
+
         let mut path = Vec::new();
         self.ensure_node(&path);
 
@@ -117,12 +127,67 @@ impl<S: Storage> VerkleTree<S> {
     }
 
     /// Get value dengan key
-    pub fn get(&self, key: [u8; KEY_SIZE]) -> Option<Vec<u8>> {
+    /// returns CoreError::PrunedData jika key sudah dipangkas.
+    pub fn get(&self, key: [u8; KEY_SIZE]) -> Result<Option<Vec<u8>>, CoreError> {
+        let path_key = key.to_vec();
+        if self.pruned_keys.contains(&path_key) {
+            return Err(CoreError::PrunedData("Key has been pruned".into()));
+        }
+
         let mut path = Vec::new();
         for &byte in key.iter().take(KEY_SIZE) {
             path.push(byte);
         }
-        self.get_node_value(&path)
+        Ok(self.get_node_value(&path))
+    }
+
+    /// Prune leaf key at node level: hapus value dan pertahankan struktur internal.
+    pub fn prune_key(&mut self, key: [u8; KEY_SIZE]) -> Result<(), CoreError> {
+        let mut path = Vec::new();
+
+        // Pastikan leaf path ada
+        for &byte in key.iter().take(KEY_SIZE) {
+            path.push(byte);
+        }
+
+        let key_bytes = Self::key_for_path(&path);
+
+        if !self.node_exists(&path) {
+            // Tidak ada value untuk di-prune
+            return Err(CoreError::PrunedData("Key does not exist or already absent".into()));
+        }
+
+        // Record current commitments along the path (root..leaf) sebelum value dihapus
+        let mut path_prefix = Vec::new();
+        for (depth, byte) in key.iter().enumerate() {
+            let node_key = Self::key_for_path(&path_prefix);
+            if let Some(commitment) = self.get_node_commitment(&path_prefix, depth) {
+                self.pruned_commitments.insert(node_key, commitment);
+            }
+            path_prefix.push(*byte);
+        }
+
+        let leaf_node_key = Self::key_for_path(&path_prefix);
+        if let Some(commitment) = self.get_node_commitment(&path_prefix, KEY_SIZE) {
+            self.pruned_commitments.insert(leaf_node_key, commitment);
+        }
+
+        // Hapus nilai leaf dari storage, biarkan internal node tetap utuh
+        self.storage.delete(&key_bytes);
+
+        // Mark as pruned agar get() bisa return error khusus
+        self.pruned_keys.insert(path.clone());
+
+        // Invalidate normal cache di path tersebut.
+        self.invalidate_path_cache(&path);
+
+        // Keep root cache consistent with pruned commitment root (stateless support)
+        if let Some(root_commit) = self.pruned_commitments.get(&Vec::new()) {
+            self.root_cache = Some(Self::commitment_root_hash(root_commit));
+            self.dirty = false;
+        }
+
+        Ok(())
     }
 
     /// Clone storage untuk external use
@@ -166,11 +231,8 @@ impl<S: Storage> VerkleTree<S> {
                         &byte.to_le_bytes()[..],
                     );
                     let value_hash = self.hash_node_value_at_index(&path, byte);
-                    if let Ok(proof) = self.pc.open(
-                        &self.reconstruct_node_polynomial(&path, depth),
-                        point,
-                        value_hash,
-                    ) {
+                    let polynomial = self.reconstruct_node_polynomial(&path, depth);
+                    if let Ok(proof) = self.pc.open(&polynomial, point, value_hash) {
                         opening_proofs.push(proof);
                     }
                 }
@@ -230,8 +292,9 @@ impl<S: Storage> VerkleTree<S> {
         }
 
         // Verify IPA opening proofs untuk setiap level
-        for opening_proof in &proof.opening_proofs {
-            if self.pc.verify(&opening_proof.quotient_commitment, opening_proof).is_err() {
+        for (i, opening_proof) in proof.opening_proofs.iter().enumerate() {
+            if let Err(err) = self.pc.verify(&opening_proof.quotient_commitment, opening_proof) {
+                println!("[verkle][verify_proof] IPA opening proof #{} failed: {:?}", i, err);
                 return false;
             }
         }
@@ -275,13 +338,27 @@ impl<S: Storage> VerkleTree<S> {
             if let Ok(reconstructed_commitment) = self.pc.commit(&polynomial) {
                 let reconstructed_root = Self::commitment_root_hash(&reconstructed_commitment);
 
+                // Debug logging per level (aktif bila `--nocapture`)
+                println!(
+                    "[verkle][verify_proof] depth={} computed_root={:?} expected_root={:?}",
+                    depth, reconstructed_root, proof.root
+                );
+
                 computed_root = reconstructed_root;
                 current_scalar = <EdwardsProjective as Group>::ScalarField::from_le_bytes_mod_order(
                     &reconstructed_root,
                 );
             } else {
+                println!("[verkle][verify_proof] failed commit at depth {}", depth);
                 return false;
             }
+        }
+
+        if computed_root != proof.root {
+            println!(
+                "[verkle][verify_proof] final root mismatch: computed={:?} expected={:?}",
+                computed_root, proof.root
+            );
         }
 
         computed_root == proof.root
@@ -352,6 +429,11 @@ impl<S: Storage> VerkleTree<S> {
 
     /// Get node value dari storage
     fn get_node_value(&self, path: &[u8]) -> Option<Vec<u8>> {
+        // If leaf already pruned, it should be logically absent.
+        if path.len() == KEY_SIZE && self.pruned_keys.contains(path) {
+            return None;
+        }
+
         let key = Self::key_for_path(path);
         self.storage
             .get(&key)
@@ -377,10 +459,37 @@ impl<S: Storage> VerkleTree<S> {
         self.dirty = true;
     }
 
+    /// Hapus marker pruned dan commit laluan yang mungkin usang dari root untuk key yang diinsert
+    fn clear_pruned_state_for_key(&mut self, key: &[u8; KEY_SIZE]) {
+        let mut path = Vec::new();
+
+        // Bersihkan pruned marker pada key jika ada
+        self.pruned_keys.remove(&key[..]);
+
+        // Bersihkan pruned commit set di path ancestor yang terpengaruh
+        for byte in key.iter() {
+            let node_key = Self::key_for_path(&path);
+            self.pruned_commitments.remove(&node_key);
+            path.push(*byte);
+        }
+
+        let root_key = Self::key_for_path(&path);
+        self.pruned_commitments.remove(&root_key);
+
+        // if root was kept as pruned and now data changed, invalidate
+        self.root_cache = None;
+        self.dirty = true;
+    }
+
     /// Get atau compute cached commitment untuk node
     fn get_node_commitment(&mut self, path: &[u8], depth: usize) -> Option<Commitment> {
         let node_key = Self::key_for_path(path);
-        
+
+        // If this path has recorded commitment for pruned support, prioritize it.
+        if let Some(commitment) = self.pruned_commitments.get(&node_key) {
+            return Some(commitment.clone());
+        }
+
         // Check cache dulu
         if let Some(cached) = self.commitment_cache.get(&node_key) {
             if let Some(commitment) = &cached.commitment {
@@ -401,7 +510,12 @@ impl<S: Storage> VerkleTree<S> {
     }
 
     /// Compute polynomial commitment untuk node dengan efficient re-use
-    fn compute_node_commitment(&self, path: &[u8], depth: usize) -> Commitment {
+    fn compute_node_commitment(&mut self, path: &[u8], depth: usize) -> Commitment {
+        let node_key = Self::key_for_path(path);
+        if let Some(prev_commitment) = self.pruned_commitments.get(&node_key) {
+            return prev_commitment.clone();
+        }
+
         if depth == KEY_SIZE {
             let leaf_scalar = self
                 .get_node_value(path)
@@ -434,7 +548,7 @@ impl<S: Storage> VerkleTree<S> {
 
     /// Reconstruct polynomial untuk node (untuk IPA opening)
     fn reconstruct_node_polynomial(
-        &self,
+        &mut self,
         path: &[u8],
         depth: usize,
     ) -> DensePolynomial<<EdwardsProjective as Group>::ScalarField> {
@@ -506,9 +620,11 @@ impl<S: Storage> VerkleTree<S> {
         self.empty_subtree_scalars[depth]
     }
 
-    /// Compute root hash untuk node
-    fn compute_node_root_hash(&self, path: &[u8], depth: usize) -> [u8; 32] {
-        let commitment = self.compute_node_commitment(path, depth);
+    /// Compute root hash untuk node. Gunakan cache dari get_node_commitment (mutasi internal)
+    fn compute_node_root_hash(&mut self, path: &[u8], depth: usize) -> [u8; 32] {
+        let commitment = self
+            .get_node_commitment(path, depth)
+            .unwrap_or_else(|| self.compute_node_commitment(path, depth));
         Self::commitment_root_hash(&commitment)
     }
 
@@ -531,7 +647,7 @@ impl<S: Storage> VerkleTree<S> {
     }
 
     /// Hash node value untuk specific child index (untuk IPA opening point)
-    fn hash_node_value_at_index(&self, path: &[u8], child_index: u8) -> <EdwardsProjective as Group>::ScalarField {
+    fn hash_node_value_at_index(&mut self, path: &[u8], child_index: u8) -> <EdwardsProjective as Group>::ScalarField {
         let mut child_path = path.to_vec();
         child_path.push(child_index);
         let child_root = self.compute_node_root_hash(&child_path, path.len() + 1);
@@ -553,7 +669,7 @@ mod tests {
         let value = b"hello".to_vec();
 
         tree.insert(key, value.clone());
-        let retrieved = tree.get(key);
+        let retrieved = tree.get(key).unwrap();
 
         assert_eq!(retrieved, Some(value));
     }
@@ -592,8 +708,8 @@ mod tests {
         let root2 = tree.get_root();
 
         assert_ne!(root1, root2);
-        assert_eq!(tree.get(key1), Some(value1));
-        assert_eq!(tree.get(key2), Some(value2));
+        assert_eq!(tree.get(key1).unwrap(), Some(value1));
+        assert_eq!(tree.get(key2).unwrap(), Some(value2));
     }
 
     #[test]

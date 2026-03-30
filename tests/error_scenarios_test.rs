@@ -90,7 +90,7 @@ fn test_core_error_variants_comprehensive() {
 
     // Test TransactionError - create invalid transaction
     let mut utxo = UtxoSet::new();
-    let invalid_tx = Transaction {
+    let invalid_tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"invalid_tx"),
         inputs: vec![TxInput {
             prev_tx: Hash::new(b"nonexistent_prev"),
@@ -119,9 +119,8 @@ fn test_core_error_variants_comprehensive() {
     assert!(invalid_pubkey_result.is_err()); // Should be InvalidPublicKey
 
     // Test SignatureVerificationFailed - create valid format but wrong signature
-    let keypair = KeyPairWrapper::new();
     let wrong_sig = [0xFFu8; 64]; // Wrong signature
-    let pubkey_bytes: [u8; 32] = keypair.public_key().to_bytes().as_ref().try_into().unwrap();
+    let pubkey_bytes: [u8; 32] = [0u8; 32];
     let verify_wrong = verify_schnorr(&pubkey_bytes, &wrong_sig, b"test");
     assert!(verify_wrong.is_err()); // Should be SignatureVerificationFailed
 

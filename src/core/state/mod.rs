@@ -2,6 +2,7 @@ pub mod transaction;
 pub mod utxo;
 pub mod storage;
 pub mod v_trie;
+pub mod access_set;
 
 pub use self::storage::{MemoryStorage, Storage};
 
@@ -16,6 +17,12 @@ use std::collections::HashMap;
 ///
 /// Tracks consensus state and finality information for the DAG.
 #[derive(Debug, Clone)]
+pub struct PruneMarker {
+    pub epoch: u64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct BlockchainState {
     /// Current finalizing block (block that determines order)
     pub finalizing_block: Option<Hash>,
@@ -25,6 +32,8 @@ pub struct BlockchainState {
     pub pruned: Vec<Hash>,
     /// UTXO set for transaction state
     pub utxo_set: UtxoSet,
+    /// Optional pruning metadata for UTXO entries / Verkle leaves
+    pub prune_markers: HashMap<OutPoint, PruneMarker>,
 }
 
 impl BlockchainState {
@@ -34,7 +43,43 @@ impl BlockchainState {
             virtual_score: 0,
             pruned: Vec::new(),
             utxo_set: UtxoSet::new(),
+            prune_markers: HashMap::new(),
         }
+    }
+
+    /// Tandai leaf/outpoint sebagai kandidat pruning.
+    /// epoch/timestamp bisa digunakan Node repo untuk kebijakan umur.
+    pub fn mark_leaf_for_pruning(&mut self, outpoint: OutPoint, epoch: u64, timestamp: u64) {
+        self.prune_markers.insert(outpoint, PruneMarker { epoch, timestamp });
+    }
+
+    /// Periksa apakah leaf sudah ditandai for prune.
+    pub fn is_leaf_marked_pruned(&self, outpoint: &OutPoint) -> bool {
+        self.prune_markers.contains_key(outpoint)
+    }
+
+    /// Cleanup leaf dari memori state/utxo jika telah di-prune.
+    /// Catatan: integrasi Verkle remove harus dilakukan di StateManager / VerkleTree.
+    pub fn prune_leaf(&mut self, outpoint: &OutPoint) -> Result<(), CoreError> {
+        self.utxo_set.utxos.remove(outpoint);
+        self.prune_markers.remove(outpoint);
+        Ok(())
+    }
+
+    /// Pelaksanaan batch prune sesuai threshold epoch.
+    pub fn prune_older_than(&mut self, epoch_threshold: u64) -> Result<Vec<OutPoint>, CoreError> {
+        let to_prune: Vec<OutPoint> = self
+            .prune_markers
+            .iter()
+            .filter(|(_outpoint, marker)| marker.epoch <= epoch_threshold)
+            .map(|(outpoint, _)| outpoint.clone())
+            .collect();
+
+        for outpoint in &to_prune {
+            self.prune_leaf(outpoint)?;
+        }
+
+        Ok(to_prune)
     }
 
     pub fn set_finalizing_block(&mut self, block: Hash) {

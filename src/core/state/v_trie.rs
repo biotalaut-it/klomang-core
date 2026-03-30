@@ -3,6 +3,7 @@ use crate::core::crypto::verkle::PolynomialCommitment;
 use crate::core::errors::CoreError;
 use crate::core::state::storage::Storage;
 use ark_ec::Group;
+use std::collections::HashSet;
 use ark_ed_on_bls12_381_bandersnatch::EdwardsProjective;
 use ark_ff::{Field, PrimeField};
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial};
@@ -39,6 +40,7 @@ pub struct VerkleTree<S: Storage> {
     pc: PolynomialCommitment,
     empty_subtree_roots: Vec<[u8; 32]>,
     empty_subtree_scalars: Vec<<EdwardsProjective as Group>::ScalarField>,
+    pruned_keys: HashSet<Vec<u8>>,
 }
 
 impl<S: Storage> VerkleTree<S> {
@@ -52,6 +54,7 @@ impl<S: Storage> VerkleTree<S> {
             pc,
             empty_subtree_roots,
             empty_subtree_scalars,
+            pruned_keys: HashSet::new(),
         };
         tree.ensure_node(&[]);
         Ok(tree)
@@ -67,6 +70,36 @@ impl<S: Storage> VerkleTree<S> {
         }
 
         self.set_node_value(&path, Some(value));
+    }
+
+    pub fn get(&self, key: [u8; KEY_SIZE]) -> Result<Option<Vec<u8>>, CoreError> {
+        let path_vec = key.to_vec();
+        if self.pruned_keys.contains(&path_vec) {
+            return Err(CoreError::PrunedData("Key has been pruned".to_string()));
+        }
+
+        let mut path = Vec::new();
+        for &byte in key.iter().take(KEY_SIZE) {
+            path.push(byte);
+        }
+
+        Ok(self.get_node_value(&path))
+    }
+
+    pub fn prune_key(&mut self, key: [u8; KEY_SIZE]) -> Result<(), CoreError> {
+        let mut path = Vec::new();
+        for &byte in key.iter().take(KEY_SIZE) {
+            path.push(byte);
+        }
+
+        let storage_key = Self::key_for_path(&path);
+        if self.storage.get(&storage_key).is_none() {
+            return Err(CoreError::PrunedData("Key does not exist or already absent".to_string()));
+        }
+
+        self.storage.delete(&storage_key);
+        self.pruned_keys.insert(path.clone());
+        Ok(())
     }
 
     pub fn get_root(&self) -> Result<[u8; 32], CoreError> {
@@ -352,6 +385,16 @@ impl<S: Storage> VerkleTree<S> {
     fn value_to_scalar(value: &[u8]) -> <EdwardsProjective as Group>::ScalarField {
         let hash = blake3::hash(value);
         <EdwardsProjective as Group>::ScalarField::from_le_bytes_mod_order(hash.as_bytes())
+    }
+}
+
+impl<S: Storage + Clone> Clone for VerkleTree<S> {
+    fn clone(&self) -> Self {
+        let mut cloned = VerkleTree::new(self.storage_clone()).expect("failed to clone VerkleTree");
+        cloned.pruned_keys = self.pruned_keys.clone();
+        cloned.empty_subtree_roots = self.empty_subtree_roots.clone();
+        cloned.empty_subtree_scalars = self.empty_subtree_scalars.clone();
+        cloned
     }
 }
 

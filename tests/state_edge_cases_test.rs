@@ -8,16 +8,15 @@ use klomang_core::core::state::utxo::UtxoSet;
 use klomang_core::core::state::MemoryStorage;
 use klomang_core::core::state_manager::{StateManager, StateManagerError};
 use klomang_core::core::state::v_trie::VerkleTree;
+use wasmer::wat2wasm;
 use std::collections::HashSet;
 
 fn make_tx(inputs: Vec<TxInput>, outputs: Vec<TxOutput>) -> Transaction {
-    Transaction {
-        id: Hash::new(b"test_tx"),
-        inputs,
-        outputs,
-        chain_id: 1,
-        locktime: 0,
-    }
+    let mut tx = Transaction::new(inputs, outputs);
+    tx.id = Hash::new(b"test_tx");
+    tx.chain_id = 1;
+    tx.locktime = 0;
+    tx
 }
 
 fn make_block(id: &[u8], txs: Vec<Transaction>) -> BlockNode {
@@ -67,7 +66,7 @@ fn test_block_no_outputs() {
     let mut manager = StateManager::new(tree)
         .expect("Failed to create StateManager");
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"no_output_tx"),
         inputs: vec![],
         outputs: vec![],
@@ -208,12 +207,56 @@ fn test_restore_from_nonexistent_snapshot() {
     }
 }
 
-/// Test 8: Large value in transaction
+/// Test 8: Contract out-of-gas with rollback to previous state
+#[test]
+fn test_contract_out_of_gas() {
+    let mut utxo_set = UtxoSet::new();
+    let storage = MemoryStorage::new();
+    let tree = VerkleTree::new(storage).expect("Failed to create VerkleTree");
+    let mut manager = StateManager::new(tree).expect("Failed to create StateManager");
+
+    let wasm = wat2wasm(r#"
+        (module
+            (import "env" "klomang_state_write" (func $state_write (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "abcdefghijklmnopqrstuvwx0123456789")
+            (data (i32.const 64) "hello")
+            (func (export "run")
+                i32.const 0
+                i32.const 32
+                i32.const 64
+                i32.const 5
+                call $state_write
+                drop
+            )
+        )
+    "#.as_bytes()).expect("Failed to compile WAT to WASM").to_vec();
+
+    let mut tx = Transaction::new(vec![], vec![]);
+    tx.execution_payload = wasm;
+    tx.contract_address = Some([0u8; 32]);
+    tx.gas_limit = 40_000;
+    tx.max_fee_per_gas = 1;
+    tx.id = Hash::new(b"oogs_tx");
+
+    let root_before = manager.tree.get_root().expect("Failed to get root");
+
+    let block = make_block(b"oogs_block", vec![tx]);
+    let result = manager.apply_block(&block, &mut utxo_set);
+
+    assert!(result.is_err());
+    assert_eq!(manager.current_height, 0);
+
+    let root_after = manager.tree.get_root().expect("Failed to get root after out-of-gas");
+    assert_eq!(root_before, root_after);
+}
+
+/// Test 9: Large value in transaction
 #[test]
 fn test_transaction_large_value() {
     let mut utxo_set = UtxoSet::new();
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"large_value_tx"),
         inputs: vec![],
         outputs: vec![TxOutput {
@@ -231,7 +274,7 @@ fn test_transaction_large_value() {
 /// Test 9: Multiple outputs per transaction
 #[test]
 fn test_multiple_outputs_per_tx() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"multi_output_tx"),
         inputs: vec![],
         outputs: (0..100).map(|i| TxOutput {
@@ -288,7 +331,7 @@ fn test_validate_snapshots_valid() {
 /// Test 12: Transaction with zero value output
 #[test]
 fn test_zero_value_output() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"zero_value_tx"),
         inputs: vec![],
         outputs: vec![TxOutput {
@@ -305,7 +348,7 @@ fn test_zero_value_output() {
 /// Test 13: Chain ID variations
 #[test]
 fn test_transaction_chain_id() {
-    let tx1 = Transaction {
+    let tx1 = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"tx1"),
         inputs: vec![],
         outputs: vec![],
@@ -313,7 +356,7 @@ fn test_transaction_chain_id() {
         locktime: 0,
     };
     
-    let tx2 = Transaction {
+    let tx2 = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(b"tx2"),
         inputs: vec![],
         outputs: vec![],
@@ -334,7 +377,7 @@ fn test_block_many_transactions() {
     let mut manager = StateManager::new(tree)
         .expect("Failed to create StateManager");
     
-    let txs: Vec<Transaction> = (0..50).map(|i| Transaction {
+    let txs: Vec<Transaction> = (0..50).map(|i| Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         id: Hash::new(format!("tx{}", i).as_bytes()),
         inputs: vec![],
         outputs: vec![TxOutput {

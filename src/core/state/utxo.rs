@@ -27,7 +27,23 @@ impl UtxoSet {
     }
 
     /// Validate transaction inputs without mutations
+    pub const ZERO_ADDRESS: [u8; 32] = [0u8; 32];
+
     pub fn validate_tx(&self, tx: &Transaction) -> Result<u64, CoreError> {
+        // Anti-Deflationary: reject outputs to null/burn address, including coinbase
+        let zero_address_hash = crate::core::crypto::Hash::new(&Self::ZERO_ADDRESS);
+        for output in &tx.outputs {
+            if output.pubkey_hash == zero_address_hash {
+                println!(
+                    "[utxo][validate_tx] reject tx {} output to ZERO_ADDRESS",
+                    tx.id
+                );
+                return Err(CoreError::TransactionError(
+                    "Output to zero address (burn) is prohibited".to_string(),
+                ));
+            }
+        }
+
         if tx.is_coinbase() {
             return Ok(0);
         }
@@ -176,7 +192,7 @@ mod tests {
 
         // Create transaction that spends from tx0:0
         let keypair = KeyPairWrapper::new();
-        let mut tx = Transaction {
+        let mut tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
             id: Hash::new(b"tx1"),
             inputs: vec![TxInput {
                 prev_tx: Hash::new(b"tx0"),
@@ -233,7 +249,7 @@ mod tests {
         let pubkey_hash = Hash::new(b"pubkey1");
 
         // Create transaction with non-existent input
-        let tx = Transaction {
+        let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
             id: Hash::new(b"tx1"),
             inputs: vec![TxInput {
                 prev_tx: Hash::new(b"nonexistent"),
@@ -261,7 +277,7 @@ mod tests {
     #[test]
     fn test_coinbase_valid() {
         let pubkey_hash = Hash::new(b"pubkey1");
-        let tx = Transaction {
+        let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
             id: Hash::new(b"coinbase_tx"),
             inputs: vec![],
             outputs: vec![TxOutput {
@@ -283,7 +299,7 @@ mod tests {
     #[test]
     fn test_coinbase_invalid_reward() {
         let pubkey_hash = Hash::new(b"pubkey1");
-        let tx = Transaction {
+        let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
             id: Hash::new(b"coinbase_tx"),
             inputs: vec![],
             outputs: vec![TxOutput {
@@ -297,5 +313,20 @@ mod tests {
         // Should fail because output (100) > reward (50)
         let sum: u128 = tx.outputs.iter().map(|o| o.value as u128).sum();
         assert_eq!(sum, 100);
+    }
+
+    #[test]
+    fn test_validate_tx_reject_zero_address_output() {
+        let utxo = UtxoSet::new();
+        let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
+            id: Hash::new(b"tx1"),
+            inputs: vec![],
+            outputs: vec![TxOutput { value: 100, pubkey_hash: Hash::new(&[0u8; 32]) }],
+            chain_id: 1,
+            locktime: 0,
+        };
+
+        let result = utxo.validate_tx(&tx);
+        assert!(result.is_err());
     }
 }

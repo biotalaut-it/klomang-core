@@ -4,7 +4,8 @@
 /// Ensures total supply never exceeds MAX_SUPPLY
 pub const COIN_UNIT: u64 = 100_000_000; // 1 SLUG = 10^8 smallest units
 pub const UNIT: u128 = COIN_UNIT as u128; // 8 decimal places
-pub const MAX_SUPPLY: u128 = 600_000_000u128 * UNIT; // 600M * 1e8 smallest unit
+pub const MAX_GLOBAL_SUPPLY: u128 = 600_000_000_000_000_000; // 600M in Nano-SLUG (smallest unit)
+pub const MAX_SUPPLY: u128 = MAX_GLOBAL_SUPPLY;
 pub const BASE_REWARD: u128 = 100u128 * UNIT; // initial block reward (100 coins)
 pub const HALVING_INTERVAL: u64 = 100_000;
 pub const MIN_REWARD: u128 = 1; // 1 smallest unit (sat equivalent)
@@ -116,6 +117,10 @@ pub fn capped_reward(daa_score: u64) -> u128 {
     let current_total = total_emitted(daa_score);
     let base_reward = raw_block_reward(daa_score);
 
+    if current_total >= MAX_SUPPLY {
+        return 0;
+    }
+
     if current_total + base_reward > MAX_SUPPLY {
         MAX_SUPPLY.saturating_sub(current_total)
     } else {
@@ -132,7 +137,7 @@ pub fn validate_reward_split(daa_score: u64, active_node_count: u32) -> bool {
 
 /// Get maximum supply constant
 pub fn max_supply() -> u128 {
-    MAX_SUPPLY
+    MAX_GLOBAL_SUPPLY
 }
 
 #[cfg(test)]
@@ -188,6 +193,7 @@ mod tests {
 
     #[test]
     fn test_max_supply_constant() {
-        assert_eq!(max_supply(), 600_000_000 * UNIT);
+        assert_eq!(max_supply(), MAX_GLOBAL_SUPPLY);
+        assert_eq!(max_supply(), 600_000_000_000_000_000u128);
     }
 }

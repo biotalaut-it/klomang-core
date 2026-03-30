@@ -1,8 +1,11 @@
 use crate::core::dag::BlockNode;
 use crate::core::state::storage::Storage;
 use crate::core::state::transaction::Transaction;
-use crate::core::state::utxo::UtxoSet;
+use crate::core::state::utxo::{OutPoint, UtxoSet};
 use crate::core::state::v_trie::VerkleTree;
+use crate::core::state::PruneMarker;
+use crate::core::vm::VMExecutor;
+use std::collections::HashMap;
 
 /// Minimal state container exposing the current Verkle root.
 #[derive(Debug, Clone)]
@@ -34,9 +37,11 @@ pub struct StateManager<S: Storage + Clone> {
     pub current_height: u64,
     pub snapshots: Vec<StateSnapshot>,
     snapshot_storages: Vec<S>,
+    pub prune_markers: HashMap<OutPoint, PruneMarker>,
+    pub outpoint_to_key: HashMap<OutPoint, [u8; 32]>,
 }
 
-impl<S: Storage + Clone> StateManager<S> {
+impl<S: Storage + Clone + Send + Sync + 'static> StateManager<S> {
     pub fn new(tree: VerkleTree<S>) -> Result<Self, StateManagerError> {
         let root = tree.get_root()
             .map_err(|e| StateManagerError::CryptographicError(format!("Failed to get root: {}", e)))?;
@@ -47,6 +52,8 @@ impl<S: Storage + Clone> StateManager<S> {
             current_height: 0,
             snapshots: vec![StateSnapshot { height: 0, root }],
             snapshot_storages: vec![storage_snapshot],
+            prune_markers: HashMap::new(),
+            outpoint_to_key: HashMap::new(),
         })
     }
 
@@ -72,20 +79,77 @@ impl<S: Storage + Clone> StateManager<S> {
 
     /// Apply transaction dengan error handling untuk validation
     fn apply_transaction(&mut self, tx: &Transaction, utxo: &mut UtxoSet) -> Result<(), StateManagerError> {
+        if tx.execution_payload.is_empty() && tx.contract_address.is_none() {
+            self.apply_utxo_transaction(tx, utxo)
+        } else {
+            self.apply_contract_transition(tx, utxo)
+        }
+    }
+
+    /// Internal helper: apply standar UTXO-only transaction
+    fn apply_utxo_transaction(&mut self, tx: &Transaction, utxo: &mut UtxoSet) -> Result<(), StateManagerError> {
         // Process inputs (remove from UTXO set)
         for input in &tx.inputs {
-            let key = (input.prev_tx.clone(), input.index);
-            utxo.utxos.remove(&key);
+            let outpoint = (input.prev_tx.clone(), input.index);
+            utxo.utxos.remove(&outpoint);
+            self.outpoint_to_key.remove(&outpoint);
+            self.prune_markers.remove(&outpoint);
         }
 
         // Process outputs (add to UTXO set dan tree)
         for (i, output) in tx.outputs.iter().enumerate() {
             let key = tx.hash_with_index(i as u32);
-            utxo.utxos.insert((tx.id.clone(), i as u32), output.clone());
+            let outpoint = (tx.id.clone(), i as u32);
+            utxo.utxos.insert(outpoint.clone(), output.clone());
             self.tree.insert(key, output.serialize());
+            self.outpoint_to_key.insert(outpoint.clone(), key);
         }
 
         Ok(())
+    }
+
+    /// Internal helper: apply contract execution transaction
+    fn apply_contract_transition(&mut self, tx: &Transaction, utxo: &mut UtxoSet) -> Result<(), StateManagerError> {
+        // Gas validation based on intrinsic + calldata scoring.
+        let payload_data_cost: u64 = tx.execution_payload.iter().fold(0, |acc, byte| {
+            acc + if *byte == 0 { 4 } else { 16 }
+        });
+        let intrinsic_cost: u64 = 21_000;
+        let required_gas = intrinsic_cost.saturating_add(payload_data_cost);
+
+        if tx.gas_limit < required_gas {
+            return Err(StateManagerError::ApplyBlockFailed(format!(
+                "Insufficient gas limit ({}), required {} for intrinsic+payload cost {} bytes",
+                tx.gas_limit,
+                required_gas,
+                tx.execution_payload.len()
+            )));
+        }
+
+        // Snapshot state tree for rollback
+        let tree_snapshot = self.tree.clone();
+
+        // Execute contract payload using VMExecutor
+        let exec_res = VMExecutor::execute(&tx.execution_payload, self, [0u8; 32], tx.gas_limit);
+
+        match exec_res {
+            Ok(gas_used) => {
+                let total_gas_fee = (gas_used as u128).saturating_mul(tx.max_fee_per_gas);
+
+                // Gas fee is accounted for and pooled, no burn.
+                // This will be included in reward calculations in consensus/reward.rs.
+                let _ = (gas_used, tx.max_fee_per_gas, total_gas_fee); // keep info for debugging, avoid warning
+
+                // Keep the state updates done by host functions from VM
+                // For compatibility, still apply UTXO outputs on top of contract run
+                self.apply_utxo_transaction(tx, utxo)
+            }
+            Err(err) => {
+                // Roll back Verkle tree state
+                self.tree = tree_snapshot;
+                Err(StateManagerError::ApplyBlockFailed(format!("VM execution failed: {}", err)))
+            }
+        }
     }
 
     /// Get root hash dari current state
@@ -194,6 +258,51 @@ impl<S: Storage + Clone> StateManager<S> {
             height: self.current_height,
             root,
         })
+    }
+
+    /// VM host read state from Verkle tree
+    pub fn state_read(&self, key: [u8; 32]) -> Result<Option<Vec<u8>>, String> {
+        match self.tree.get(key) {
+            Ok(val) => Ok(val),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// VM host write state to Verkle tree
+    pub fn state_write(&mut self, key: [u8; 32], value: Vec<u8>) -> Result<(), String> {
+        // For simplicity, state writes use insert (overwrite leaf)
+        self.tree.insert(key, value);
+        Ok(())
+    }
+
+    /// Tandai UTXO/outpoint untuk pruning pada epoch/timestamp tertentu.
+    pub fn mark_outpoint_for_pruning(&mut self, outpoint: OutPoint, epoch: u64, timestamp: u64) {
+        self.prune_markers.insert(outpoint, PruneMarker { epoch, timestamp });
+    }
+
+    /// Jalankan pruning cycle: prune semua outpoint yang melewati epoch threshold.
+    pub fn execute_pruning_cycle(&mut self, epoch_threshold: u64, utxo: &mut UtxoSet) -> Result<Vec<OutPoint>, StateManagerError> {
+        let keys_to_prune: Vec<OutPoint> = self
+            .prune_markers
+            .iter()
+            .filter(|(_, marker)| marker.epoch <= epoch_threshold)
+            .map(|(outpoint, _)| outpoint.clone())
+            .collect();
+
+        let mut pruned = Vec::new();
+        for outpoint in keys_to_prune {
+            if let Some(key) = self.outpoint_to_key.get(&outpoint).cloned() {
+                self.tree
+                    .prune_key(key)
+                    .map_err(|e| StateManagerError::CryptographicError(format!("Prune failed: {}", e)))?;
+                utxo.utxos.remove(&outpoint);
+                self.outpoint_to_key.remove(&outpoint);
+                self.prune_markers.remove(&outpoint);
+                pruned.push(outpoint);
+            }
+        }
+
+        Ok(pruned)
     }
 
     /// Validate snapshot consistency

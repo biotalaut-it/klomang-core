@@ -188,8 +188,8 @@ impl PolynomialCommitment {
 
             let quotient_term = DensePolynomial::from_coefficients_vec(quotient_term_coeffs);
 
-            // Subtract dari remainder
-            let subtract_term = &quotient_term * denominator;
+            // Subtract dari remainder using non-FFT polynomial multiplication agar tidak membutuhkan 'GeneralEvaluationDomain'
+            let subtract_term = self.naive_polynomial_multiply(&quotient_term, denominator);
             remainder = &remainder - &subtract_term;
 
             quotient_coeffs.push(quotient_coeff);
@@ -198,6 +198,39 @@ impl PolynomialCommitment {
         // Reverse karena kita menambahkan dari degree tertinggi
         quotient_coeffs.reverse();
         DensePolynomial::from_coefficients_vec(quotient_coeffs)
+    }
+
+    /// Naive polynomial multiplication tanpa FFT dan tanpa domain constraint.
+    fn naive_polynomial_multiply(
+        &self,
+        a: &DensePolynomial<<EdwardsProjective as Group>::ScalarField>,
+        b: &DensePolynomial<<EdwardsProjective as Group>::ScalarField>,
+    ) -> DensePolynomial<<EdwardsProjective as Group>::ScalarField> {
+        if a.is_zero() || b.is_zero() {
+            return DensePolynomial::zero();
+        }
+
+        let result_len = a.coeffs().len() + b.coeffs().len() - 1;
+        let mut result_coeffs = vec![<EdwardsProjective as Group>::ScalarField::ZERO; result_len];
+
+        for (i, &a_coeff) in a.coeffs().iter().enumerate() {
+            if a_coeff.is_zero() {
+                continue;
+            }
+            for (j, &b_coeff) in b.coeffs().iter().enumerate() {
+                if b_coeff.is_zero() {
+                    continue;
+                }
+                result_coeffs[i + j] += a_coeff * b_coeff;
+            }
+        }
+
+        println!(
+            "[verkle][naive_polynomial_multiply] a_deg={}, b_deg={}, result_len={} (no FFT)",
+            a.degree(), b.degree(), result_len
+        );
+
+        DensePolynomial::from_coefficients_vec(result_coeffs)
     }
 
     /// Generate IPA proof untuk polynomial menggunakan commitment vector check.

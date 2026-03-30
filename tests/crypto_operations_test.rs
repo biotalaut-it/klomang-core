@@ -17,7 +17,7 @@ fn test_verkle_tree_insert_retrieve() {
     
     tree.insert(key, value.clone());
     
-    let retrieved = tree.get(key);
+    let retrieved = tree.get(key).unwrap();
     assert_eq!(retrieved, Some(value));
 }
 
@@ -34,7 +34,7 @@ fn test_verkle_tree_multiple_insertions() {
         let value = format!("value_{}", i).as_bytes().to_vec();
         tree.insert(key, value.clone());
         
-        let retrieved = tree.get(key);
+        let retrieved = tree.get(key).unwrap();
         assert_eq!(retrieved, Some(value));
     }
 }
@@ -163,12 +163,12 @@ fn test_verkle_tree_storage_clone() {
     
     // Clone the storage
     let cloned_storage = tree.storage_clone();
-    
+
     // Create new tree from cloned storage
-    let tree2 = VerkleTree::new(cloned_storage);
+    let mut tree2 = VerkleTree::new(cloned_storage);
     
     // Should be able to retrieve the value from new tree
-    let retrieved = tree2.get(&key);
+    let retrieved = tree2.get(key).unwrap();
     assert_eq!(retrieved, Some(value));
 }
 
@@ -176,10 +176,10 @@ fn test_verkle_tree_storage_clone() {
 #[test]
 fn test_verkle_tree_empty_operations() {
     let storage = MemoryStorage::new();
-    let tree = VerkleTree::new(storage);
+    let mut tree = VerkleTree::new(storage);
     
     let key = [0u8; 32];
-    assert_eq!(tree.get(key), None);
+    assert_eq!(tree.get(key).unwrap(), None);
     
     // Get root from empty tree
     let root = tree.get_root();
@@ -197,7 +197,7 @@ fn test_verkle_tree_large_values() {
     
     tree.insert(key, large_value.clone());
     
-    let retrieved = tree.get(key);
+    let retrieved = tree.get(key).unwrap();
     assert_eq!(retrieved, Some(large_value));
 }
 
@@ -218,7 +218,7 @@ fn test_verkle_tree_many_keys() {
     for i in 0..256 {
         let mut key = [i as u8; 32];
         let value = format!("value_{}", i).as_bytes().to_vec();
-        assert_eq!(tree.get(key), Some(value));
+        assert_eq!(tree.get(key).unwrap(), Some(value));
     }
 }
 

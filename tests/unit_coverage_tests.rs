@@ -109,7 +109,7 @@ fn test_schnorr_tagged_hash_different_tags() {
 
 #[test]
 fn test_schnorr_tx_message_consistency() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![],
@@ -128,7 +128,7 @@ fn test_schnorr_tx_message_consistency() {
 
 #[test]
 fn test_schnorr_compute_sighash_all() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![TxInput {
@@ -154,7 +154,7 @@ fn test_schnorr_compute_sighash_all() {
 
 #[test]
 fn test_schnorr_compute_sighash_none() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![TxInput {
@@ -177,7 +177,7 @@ fn test_schnorr_compute_sighash_none() {
 
 #[test]
 fn test_schnorr_compute_sighash_single() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![TxInput {
@@ -206,7 +206,7 @@ fn test_schnorr_compute_sighash_single() {
 
 #[test]
 fn test_schnorr_serialize_tx_empty_inputs_outputs() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![],
@@ -220,7 +220,7 @@ fn test_schnorr_serialize_tx_empty_inputs_outputs() {
 
 #[test]
 fn test_schnorr_serialize_tx_multiple_inputs() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![
@@ -255,7 +255,7 @@ fn test_schnorr_serialize_tx_multiple_inputs() {
 fn test_utxo_validate_coinbase_transaction() {
     let utxo_set = UtxoSet::new();
     
-    let coinbase_tx = Transaction {
+    let coinbase_tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"coinbase1"),
         inputs: vec![],
@@ -287,7 +287,7 @@ fn test_utxo_validate_insufficient_inputs() {
     );
     
     // Transaction tries to spend 150 (more than available)
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"spend_too_much"),
         inputs: vec![TxInput {
@@ -313,7 +313,7 @@ fn test_utxo_validate_insufficient_inputs() {
 fn test_utxo_validate_missing_input() {
     let utxo_set = UtxoSet::new();
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx_missing_input"),
         inputs: vec![TxInput {
@@ -348,7 +348,7 @@ fn test_utxo_validate_invalid_pubkey_length() {
         },
     );
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"bad_pubkey_len"),
         inputs: vec![TxInput {
@@ -382,7 +382,7 @@ fn test_utxo_validate_invalid_signature_length() {
         },
     );
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"bad_sig_len"),
         inputs: vec![TxInput {
@@ -536,7 +536,7 @@ fn test_reward_calculate_block_reward_after_64_halvings() {
 fn test_reward_calculate_fees_coinbase() {
     let utxo_set = UtxoSet::new();
     
-    let coinbase = Transaction {
+    let coinbase = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"coinbase"),
         inputs: vec![],
@@ -760,7 +760,7 @@ fn test_reward_halving_progression() {
 #[test]
 fn test_utxo_changeset_tracking() {
     let utxo_set = UtxoSet::new();
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"test"),
         inputs: vec![],
@@ -802,7 +802,7 @@ fn test_integration_dag_consistency() {
 fn test_error_invalid_public_key_format() {
     let utxo_set = UtxoSet::new();
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"bad_format"),
         inputs: vec![TxInput {
@@ -824,7 +824,7 @@ fn test_error_invalid_public_key_format() {
 fn test_error_transaction_with_empty_outputs() {
     let utxo_set = UtxoSet::new();
     
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"empty_out"),
         inputs: vec![],
@@ -882,7 +882,7 @@ fn test_schnorr_tag_consistency() {
 
 #[test]
 fn test_transaction_sighash_variations() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx_variations"),
         inputs: vec![
@@ -966,7 +966,7 @@ fn test_ghostdag_build_blue_set_k_parameter() {
 
 #[test]
 fn test_reward_chain_id_independence() {
-    let tx1 = Transaction {
+    let tx1 = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"tx1"),
         inputs: vec![],
@@ -977,7 +977,7 @@ fn test_reward_chain_id_independence() {
         locktime: 0,
     };
     
-    let tx2 = Transaction {
+    let tx2 = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 2,
         id: Hash::new(b"tx2"),
         inputs: vec![],
@@ -1024,7 +1024,7 @@ fn test_schnorr_keypair_determinism() {
 
 #[test]
 fn test_transaction_id_determinism() {
-    let tx = Transaction {
+    let tx = Transaction { execution_payload: Vec::new(), contract_address: None, gas_limit: 0, max_fee_per_gas: 0,
         chain_id: 1,
         id: Hash::new(b"temp"),
         inputs: vec![],
