@@ -50,7 +50,7 @@ impl fmt::Display for MempoolError {
 impl std::error::Error for MempoolError {}
 
 #[derive(Clone, Debug)]
-struct PendingTransaction {
+pub struct PendingTransaction {
     tx: SignedTransaction,
     inserted_at: u64,
     size_bytes: usize,

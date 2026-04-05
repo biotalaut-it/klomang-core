@@ -12,6 +12,7 @@ impl fmt::Display for Hash {
 }
 
 impl Hash {
+    #[inline]
     pub fn new(data: &[u8]) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(data);

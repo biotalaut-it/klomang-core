@@ -131,6 +131,25 @@ pub use core::pow::Pow;
 pub use core::crypto::verkle::{VerkleTree, VerkleProof};
 pub use core::crypto::schnorr::verify_block_signature;
 pub use core::mempool::{Mempool, MempoolError, SignedTransaction, TransactionID};
+pub use core::state_manager::StateManager;
+pub use core::state_manager::BlockUndo;
+
+// Re-export modules for direct access
+pub use core::{mempool, state, consensus, crypto, dag, state_manager};
+
+/// Prelude module for convenient imports of core types
+pub mod prelude {
+    pub use super::core::crypto::Hash;
+    pub use super::core::dag::{BlockNode, BlockHeader, Dag};
+    pub use super::core::state::transaction::Transaction;
+    pub use super::core::state::BlockchainState;
+    pub use super::core::state::utxo::UtxoSet;
+    pub use super::core::state_manager::StateManager;
+    pub use super::core::consensus::ghostdag::GhostDag;
+    pub use super::core::crypto::verkle::VerkleTree;
+    pub use super::core::mempool::Mempool;
+    pub use super::core::errors::CoreError;
+}
 
 #[no_mangle]
 pub extern "C" fn __rust_probestack() {}
